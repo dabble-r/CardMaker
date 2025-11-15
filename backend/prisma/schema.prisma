@@ -1,0 +1,55 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  
+  templates    Template[]
+  cards        Card[]
+  
+  @@map("users")
+}
+
+model Template {
+  id          String    @id @default(uuid())
+  userId      String?   @map("user_id")
+  name        String
+  description String?
+  frontJson   Json      @map("front_json")
+  backJson    Json      @map("back_json")
+  isDefault   Boolean   @default(false) @map("is_default")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  
+  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cards       Card[]
+  
+  @@map("templates")
+}
+
+model Card {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  templateId  String    @map("template_id")
+  cardDataJson Json     @map("card_data_json")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template    Template  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  
+  @@map("cards")
+}
