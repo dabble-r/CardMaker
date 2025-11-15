@@ -78,7 +78,7 @@ export const assetsAPI = {
 // Export API
 export const exportAPI = {
   exportCard: (cardId: string, format: 'png' | 'jpeg' | 'pdf' = 'png') =>
-    apiClient.post(`/export/card/${cardId}?format=${format}`, {}, {
+    apiClient.get(`/export/card/${cardId}?format=${format}`, {
       responseType: 'blob', // Expect binary response for file downloads
     }),
 };

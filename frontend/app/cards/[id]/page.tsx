@@ -65,76 +65,103 @@ export default function CardDetailPage() {
     setExporting(true);
     setExportFormat(format);
     try {
-      const response = await exportAPI.exportCard(cardId, format);
-      
-      // Check if response is a blob (binary file from local mode)
-      if (response.data instanceof Blob) {
-        // Check if it's actually an error response (error responses might be JSON in blob format)
-        if (response.headers['content-type']?.includes('application/json')) {
-          // Error response, parse it
-          const text = await response.data.text();
-          const errorData = JSON.parse(text);
-          throw new Error(errorData.message || 'Export failed');
-        }
-        
-        const url = window.URL.createObjectURL(response.data);
-        const contentDisposition = response.headers['content-disposition'];
-        const filename = contentDisposition 
-          ? contentDisposition.split('filename=')[1]?.replace(/"/g, '') || `card-${cardId}.${format}`
-          : `card-${cardId}.${format}`;
-        
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(url);
-      } else {
-        // Handle JSON response with URL (S3 mode)
-        const url = response.data.url;
-        const filename = response.data.filename || `card-${cardId}.${format}`;
+      // Get auth token for the request
+      const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
+      if (!token) {
+        alert('You must be logged in to export cards');
+        return;
+      }
 
-        if (url.startsWith('data:')) {
-          // Create a download link for data URLs
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = filename;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
+      // Create export URL with auth token
+      // In Next.js, NEXT_PUBLIC_ env vars are embedded at build time
+      // If not available, use the default backend URL
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      
+      // Ensure we have a full absolute URL (not relative)
+      // If apiUrl is empty or doesn't start with http, use default
+      const baseUrl = apiUrl && apiUrl.startsWith('http') ? apiUrl : 'http://localhost:3001';
+      const exportUrl = `${baseUrl}/export/card/${cardId}?format=${format}`;
+      
+      console.log('Export URL:', exportUrl, 'API URL env:', process.env.NEXT_PUBLIC_API_URL); // Debug log
+      
+      // Fetch the file with authentication
+      const response = await fetch(exportUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      // Check if response is OK
+      if (!response.ok) {
+        // Try to parse error message
+        const contentType = response.headers.get('content-type');
+        if (contentType?.includes('application/json')) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || `Export failed (${response.status})`);
         } else {
-          // Open S3 URL in new tab
-          window.open(url, '_blank');
+          throw new Error(`Export failed with status ${response.status}`);
         }
       }
-    } catch (error: any) {
-      let errorMessage = 'Unknown error';
-      if (error.response) {
-        // Try to parse error response (could be Blob or JSON)
-        if (error.response.data instanceof Blob) {
-          try {
-            const text = await error.response.data.text();
-            console.log('Error response text:', text);
-            const errorData = JSON.parse(text);
-            errorMessage = errorData.message || errorData.error || `Export failed (${error.response.status})`;
-          } catch (parseError) {
-            console.error('Failed to parse error response:', parseError);
-            errorMessage = `Export failed with status ${error.response.status}`;
+
+      // Get filename from content-disposition header
+      const contentDisposition = response.headers.get('content-disposition');
+      const filename = contentDisposition 
+        ? contentDisposition.split('filename=')[1]?.replace(/"/g, '') || `card-${cardId}.${format}`
+        : `card-${cardId}.${format}`;
+
+      // Get blob from response
+      const blob = await response.blob();
+
+      // Try to use File System Access API for native file save dialog
+      // This API is available in Chrome/Edge and requires HTTPS or localhost
+      if ('showSaveFilePicker' in window) {
+        try {
+          const fileHandle = await window.showSaveFilePicker({
+            suggestedName: filename,
+            types: [{
+              description: format.toUpperCase() + ' file',
+              accept: {
+                [format === 'pdf' ? 'application/pdf' : `image/${format}`]: [`.${format}`],
+              },
+            }],
+          });
+          
+          const writable = await fileHandle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          return; // Successfully saved
+        } catch (saveError: any) {
+          // User cancelled the dialog or error occurred
+          if (saveError.name !== 'AbortError') {
+            console.error('File save error:', saveError);
+            // Fall through to regular download
+          } else {
+            // User cancelled, just return
+            return;
           }
-        } else if (typeof error.response.data === 'object') {
-          errorMessage = error.response.data?.message || error.response.data?.error || `Export failed (${error.response.status})`;
-        } else {
-          errorMessage = `Export failed with status ${error.response.status}`;
         }
-      } else {
-        errorMessage = error.message || 'Unknown error';
       }
+      
+      // Fallback: Use regular download (browser will prompt for save location)
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error: any) {
+      // Don't show error if user cancelled the save dialog
+      if (error?.name === 'AbortError') {
+        return;
+      }
+      
+      const errorMessage = error.message || 'Unknown error';
       alert('Export failed: ' + errorMessage);
       console.error('Export error details:', {
         message: error.message,
-        status: error.response?.status,
-        data: error.response?.data,
         stack: error.stack,
       });
     } finally {
