@@ -1,4 +1,14 @@
-import { Controller, Post, Param, Query, UseGuards, Request, HttpException, HttpStatus, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Query,
+  UseGuards,
+  Request,
+  HttpStatus,
+  Res,
+  Logger,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { ExportService } from './export.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -6,78 +16,89 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 @Controller('export')
 @UseGuards(JwtAuthGuard)
 export class ExportController {
-  constructor(private exportService: ExportService) {}
+  private readonly logger = new Logger(ExportController.name);
 
-  @Post('card/:id')
+  constructor(private readonly exportService: ExportService) {}
+
+  @Get('card/:id')
   async exportCard(
-    @Param('id') id: string,
+    @Param('id') cardId: string,
     @Query('format') format: 'png' | 'jpeg' | 'pdf' = 'png',
-    @Request() req,
+    @Request() req: any,
     @Res() res: Response,
   ) {
+    this.logger.log(
+      `Export request: cardId=${cardId}, format=${format}, userId=${req.user?.id}`,
+    );
+
     try {
-      if (!req.user || !req.user.id) {
+      // Validate user
+      if (!req.user?.id) {
+        this.logger.warn('Export request without authenticated user');
         return res.status(HttpStatus.UNAUTHORIZED).json({
           statusCode: HttpStatus.UNAUTHORIZED,
           message: 'User not authenticated',
           error: 'Unauthorized',
         });
       }
-      
-      console.log('Export request received:', { cardId: id, format, userId: req.user.id });
-      const result = await this.exportService.exportCard(id, req.user.id, format);
-      console.log('Export successful:', { cardId: id, format, resultSize: result.size });
-      
-      // If result contains a file buffer (local mode), return it directly
-      if (result.fileBuffer) {
-        res.setHeader('Content-Type', result.contentType);
-        res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
-        res.setHeader('Content-Length', result.size);
-        res.send(result.fileBuffer);
-        return;
-      }
-      
-      // Otherwise return JSON with URL (S3 mode)
-      return res.json(result);
-    } catch (error: any) {
-      // Log full error details
-      console.error('Export controller error - Full details:', {
-        message: error?.message,
-        name: error?.name,
-        constructor: error?.constructor?.name,
-        stack: error?.stack,
-        status: error?.status,
-        response: error?.response,
-        isHttpException: error instanceof HttpException,
-      });
-      
-      // Always return errors as JSON, not binary
-      if (error instanceof HttpException) {
-        const status = error.getStatus();
-        const errorResponse = error.getResponse();
-        const errorMessage = typeof errorResponse === 'string' 
-          ? errorResponse 
-          : (errorResponse as any)?.message || error.message || 'Internal server error';
-        
-        console.error('HttpException details:', { status, errorMessage, errorResponse });
-        
-        return res.status(status).json({
-          statusCode: status,
-          message: errorMessage,
-          error: error.name || 'Error',
+
+      // Validate format
+      if (!['png', 'jpeg', 'pdf'].includes(format)) {
+        return res.status(HttpStatus.BAD_REQUEST).json({
+          statusCode: HttpStatus.BAD_REQUEST,
+          message: `Invalid format: ${format}. Must be one of: png, jpeg, pdf`,
+          error: 'Bad Request',
         });
       }
+
+      // Export card
+      const result = await this.exportService.exportCard(
+        cardId,
+        req.user.id,
+        format,
+      );
+
+      // Return file as download
+      this.logger.log(
+        `Returning file: ${result.filename}, size: ${result.size} bytes`,
+      );
       
-      // For non-HttpException errors, extract message
-      const errorMessage = error?.message || error?.toString() || 'Failed to export card';
-      console.error('Non-HttpException error:', { errorMessage, error });
-      
-      return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-        statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
+      res.setHeader('Content-Type', result.contentType);
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${result.filename}"`,
+      );
+      res.setHeader('Content-Length', result.size.toString());
+      return res.send(result.fileBuffer);
+    } catch (error: any) {
+      this.logger.error(`Export failed for card ${cardId}:`, {
+        message: error?.message,
+        stack: error?.stack,
+        status: error?.status,
+      });
+
+      // Determine status code
+      const statusCode =
+        error?.status || error?.getStatus?.() || HttpStatus.INTERNAL_SERVER_ERROR;
+
+      // Extract error message
+      let errorMessage = 'Internal server error';
+      if (error?.getResponse) {
+        const response = error.getResponse();
+        errorMessage =
+          typeof response === 'string'
+            ? response
+            : (response as any)?.message || error.message || errorMessage;
+      } else if (error?.message) {
+        errorMessage = error.message;
+      }
+
+      // Return error as JSON
+      return res.status(statusCode).json({
+        statusCode,
         message: errorMessage,
-        error: 'Internal Server Error',
+        error: error?.name || 'Error',
       });
     }
   }
 }
-

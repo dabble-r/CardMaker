@@ -20,6 +20,11 @@ async function bootstrap() {
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.use((req: any, res: any, next: any) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    console.log(`Headers:`, {
+      authorization: req.headers.authorization ? 'present' : 'missing',
+      origin: req.headers.origin,
+      'content-type': req.headers['content-type'],
+    });
     next();
   });
   
